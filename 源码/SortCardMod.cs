@@ -39,6 +39,8 @@ namespace VampireCreeperMod
         private static PropertyInfo _gamepadRightTriggerProp;
         private static MethodInfo _triggerReadValueMethod;
         private static object _gamepadCurrent;
+        private static Type _gamepadType;
+        private static PropertyInfo _gamepadCurrentProp;
         private static bool _inputSystemChecked = false;
         private static bool _useNewInputSystem = false;
         private static readonly HashSet<string> _warningOnceKeys = new HashSet<string>();
@@ -48,20 +50,12 @@ namespace VampireCreeperMod
         private bool _wasLeftTriggerPressed = false;
         private bool _wasRightTriggerPressed = false;
         private bool _nextSortAscending = true;
-        private Nosebleed.Pancake.View.HandPileView _pendingLayerFixHandView;
-        private int _pendingLayerFixFrames = 0;
         private bool _pendingSecondSort = false;
         private int _pendingSecondSortFrames = 0;
         private bool _pendingSecondSortAscending = true;
 
         private void Update()
         {
-            if (_pendingLayerFixFrames > 0)
-            {
-                TryNormalizeCardVisualLayering(_pendingLayerFixHandView);
-                _pendingLayerFixFrames--;
-            }
-
             if (_pendingSecondSort)
             {
                 if (_pendingSecondSortFrames > 0)
@@ -193,8 +187,6 @@ namespace VampireCreeperMod
             if (Math.Abs(scrollY) <= 0.01f) return false;
             if (!CanTriggerSortByScroll()) return false;
 
-            // Unity 中通常 y>0 为上滑, y<0 为下滑
-            // 需求: 下滑升序，上滑降序
             _nextSortAscending = scrollY < 0f;
             return true;
         }
@@ -206,35 +198,18 @@ namespace VampireCreeperMod
 
             try
             {
-                if (_useNewInputSystem && _triggerReadValueMethod != null)
+                if (TryEnsureGamepadInputReady())
                 {
-                    if (_gamepadCurrent == null)
+                    var leftControl = _gamepadLeftTriggerProp != null ? _gamepadLeftTriggerProp.GetValue(_gamepadCurrent) : null;
+                    var rightControl = _gamepadRightTriggerProp != null ? _gamepadRightTriggerProp.GetValue(_gamepadCurrent) : null;
+
+                    if (TryReadFloatValue(leftControl, _triggerReadValueMethod, out var leftValue))
                     {
-                        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                        foreach (var ass in assemblies)
-                        {
-                            if (!ass.FullName.Contains("InputSystem")) continue;
-                            var gamepadType = ass.GetType("UnityEngine.InputSystem.Gamepad");
-                            if (gamepadType == null) continue;
-                            var gamepadCurrentProp = gamepadType.GetProperty("current", BindingFlags.Public | BindingFlags.Static);
-                            _gamepadCurrent = gamepadCurrentProp?.GetValue(null);
-                            break;
-                        }
+                        leftPressed = leftValue >= GamepadTriggerThreshold;
                     }
-
-                    if (_gamepadCurrent != null)
+                    if (TryReadFloatValue(rightControl, _triggerReadValueMethod, out var rightValue))
                     {
-                        var leftControl = _gamepadLeftTriggerProp != null ? _gamepadLeftTriggerProp.GetValue(_gamepadCurrent) : null;
-                        var rightControl = _gamepadRightTriggerProp != null ? _gamepadRightTriggerProp.GetValue(_gamepadCurrent) : null;
-
-                        if (TryReadFloatValue(leftControl, _triggerReadValueMethod, out var leftValue))
-                        {
-                            leftPressed = leftValue >= GamepadTriggerThreshold;
-                        }
-                        if (TryReadFloatValue(rightControl, _triggerReadValueMethod, out var rightValue))
-                        {
-                            rightPressed = rightValue >= GamepadTriggerThreshold;
-                        }
+                        rightPressed = rightValue >= GamepadTriggerThreshold;
                     }
                 }
             }
@@ -258,6 +233,57 @@ namespace VampireCreeperMod
             // LT 降序
             _nextSortAscending = false;
             return true;
+        }
+
+        private bool TryEnsureGamepadInputReady()
+        {
+            try
+            {
+                if (_gamepadType == null)
+                {
+                    var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                    foreach (var ass in assemblies)
+                    {
+                        if (!ass.FullName.Contains("InputSystem")) continue;
+                        _gamepadType = ass.GetType("UnityEngine.InputSystem.Gamepad");
+                        if (_gamepadType != null) break;
+                    }
+                }
+
+                if (_gamepadType == null) return false;
+
+                if (_gamepadCurrentProp == null)
+                {
+                    _gamepadCurrentProp = _gamepadType.GetProperty("current", BindingFlags.Public | BindingFlags.Static);
+                }
+
+                _gamepadCurrent = _gamepadCurrentProp != null ? _gamepadCurrentProp.GetValue(null) : null;
+                if (_gamepadCurrent == null) return false;
+
+                if (_gamepadLeftTriggerProp == null || _gamepadRightTriggerProp == null)
+                {
+                    var padType = _gamepadCurrent.GetType();
+                    _gamepadLeftTriggerProp = padType.GetProperty("leftTrigger", BindingFlags.Public | BindingFlags.Instance);
+                    _gamepadRightTriggerProp = padType.GetProperty("rightTrigger", BindingFlags.Public | BindingFlags.Instance);
+                }
+
+                if (_triggerReadValueMethod == null)
+                {
+                    var leftControl = _gamepadLeftTriggerProp != null ? _gamepadLeftTriggerProp.GetValue(_gamepadCurrent) : null;
+                    var rightControl = _gamepadRightTriggerProp != null ? _gamepadRightTriggerProp.GetValue(_gamepadCurrent) : null;
+                    var sampleControl = leftControl ?? rightControl;
+                    if (sampleControl != null)
+                    {
+                        _triggerReadValueMethod = FindMethodInHierarchy(sampleControl.GetType(), "ReadValue", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes);
+                    }
+                }
+
+                return _triggerReadValueMethod != null;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private bool CanTriggerSortByScroll()
@@ -481,282 +507,22 @@ namespace VampireCreeperMod
                     }
                 }
 
-                // 优先使用“硬重建”保证 CardSlot/UI 层级一致，避免升降序切换后出现两叠牌
+                // 优先使用“硬重建”保证 CardSlot/UI 层级一致
                 if (TryHardRebuildHandViewByModelOrder(handView, finalModelCards))
                 {
                     handView.SyncView();
                     try { handView.RefreshCardsUI(); } catch { }
                     try { handView.RefreshCardsUI(player); } catch { }
                     try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
-                    TryNormalizeCardVisualLayering(handView);
-                    _pendingLayerFixHandView = handView;
-                    _pendingLayerFixFrames = 2;
                     SortCardMod.Instance.Log.LogInfo("Sort completed via hard rebuild + refresh.");
                     return;
                 }
-                try
-                {
-                    var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
-                    FieldInfo cardViewsField = null;
-                    MethodInfo tryInsertMethod = null;
-
-                    for (var t = handView.GetType(); t != null; t = t.BaseType)
-                    {
-                        if (cardViewsField == null)
-                        {
-                            cardViewsField = t.GetField("_cardViews", flags);
-                        }
-
-                        if (tryInsertMethod == null)
-                        {
-                            foreach (var m in t.GetMethods(flags))
-                            {
-                                if (m.Name != "TryInsertCard") continue;
-                                var ps = m.GetParameters();
-                                if (ps.Length == 2 && ps[1].ParameterType == typeof(int) && ps[0].ParameterType.Name.Contains("CardView"))
-                                {
-                                    tryInsertMethod = m;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (cardViewsField != null && tryInsertMethod != null) break;
-                    }
-
-                    var currentViews = new List<Nosebleed.Pancake.View.CardView>();
-                    if (cardViewsField != null)
-                    {
-                        var listObj = cardViewsField.GetValue(handView);
-                        if (listObj is System.Collections.IEnumerable enumerable)
-                        {
-                            foreach (var obj in enumerable)
-                            {
-                                var view = obj as Nosebleed.Pancake.View.CardView;
-                                if (view != null) currentViews.Add(view);
-                            }
-                        }
-                    }
-
-                    // 反射字段失败时，退化为从 PileRoot 的子物体上收集 CardView
-                    if (currentViews.Count == 0)
-                    {
-                        var pileRootProp = handView.GetType().GetProperty("PileRoot", flags);
-                        var pileRoot = pileRootProp != null ? pileRootProp.GetValue(handView) as Transform : null;
-                        if (pileRoot != null)
-                        {
-                            for (int i = 0; i < pileRoot.childCount; i++)
-                            {
-                                var child = pileRoot.GetChild(i);
-                                if (child == null) continue;
-                                var view = child.GetComponent<Nosebleed.Pancake.View.CardView>();
-                                if (view != null) currentViews.Add(view);
-                            }
-                        }
-                    }
-
-                    // 按模型排序结果映射到对应的 CardView 顺序
-                    var sortedViews = new List<Nosebleed.Pancake.View.CardView>();
-                    foreach (var sortedCard in sortedCards)
-                    {
-                        int matchIndex = -1;
-                        for (int i = 0; i < currentViews.Count; i++)
-                        {
-                            if (currentViews[i] == null) continue;
-                            if (AreSameIl2CppObject(currentViews[i].CardModel, sortedCard))
-                            {
-                                matchIndex = i;
-                                break;
-                            }
-                        }
-
-                        if (matchIndex >= 0)
-                        {
-                            sortedViews.Add(currentViews[matchIndex]);
-                            currentViews.RemoveAt(matchIndex);
-                        }
-                    }
-
-                    // 把剩余未匹配的 view 追加，避免丢卡
-                    for (int i = 0; i < currentViews.Count; i++)
-                    {
-                        if (currentViews[i] != null) sortedViews.Add(currentViews[i]);
-                    }
-
-                    if (sortedViews.Count == 0)
-                    {
-                        LogWarningOnce("no_cardviews_collected", "No CardViews collected for UI reordering.");
-                    }
-                    else if (tryInsertMethod != null)
-                    {
-                        for (int i = 0; i < sortedViews.Count; i++)
-                        {
-                            tryInsertMethod.Invoke(handView, new object[] { sortedViews[i], i });
-                        }
-                    }
-                    else
-                    {
-                        // 最终兜底：直接修改层级顺序，强制视觉位置变化
-                        for (int i = 0; i < sortedViews.Count; i++)
-                        {
-                            if (sortedViews[i] != null) sortedViews[i].transform.SetSiblingIndex(i);
-                        }
-                        LogWarningOnce("tryinsert_missing", "TryInsertCard not found, used transform.SetSiblingIndex fallback.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LogWarningOnce("ui_reorder_fallback_failed", "UI reorder fallback failed: " + ex.Message);
-                }
-
-                try
-                {
-                    var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
-                    var cardGroup = handView.CardGroup;
-                    if (cardGroup != null)
-                    {
-                        var activeSlotsField = FindFieldInHierarchy(cardGroup.GetType(), "_activeCardSlots", flags);
-                        var layoutGroupField = FindFieldInHierarchy(cardGroup.GetType(), "_layoutGroup", flags);
-                        var trySetIndexMethod = FindMethodInHierarchy(cardGroup.GetType(), "TrySetLayoutGroupIndex", flags, new Type[] { typeof(int) });
-                        var activeSlotsObj = activeSlotsField != null ? activeSlotsField.GetValue(cardGroup) : null;
-
-                        if (activeSlotsObj == null)
-                        {
-                            LogWarningOnce("active_slots_null", "Step 6.6: _activeCardSlots field is null. cardGroupType=" + cardGroup.GetType().FullName);
-                        }
-
-                        var slotInfos = new List<Tuple<object, Nosebleed.Pancake.Models.CardModel>>();
-                        if (activeSlotsObj != null)
-                        {
-                            foreach (var slotObj in EnumerateUnknownList(activeSlotsObj))
-                            {
-                                if (slotObj == null) continue;
-                                var slotCardModel = TryGetCardModelFromSlot(slotObj, flags);
-                                slotInfos.Add(new Tuple<object, Nosebleed.Pancake.Models.CardModel>(slotObj, slotCardModel));
-                            }
-                        }
-
-                        if (slotInfos.Count > 0)
-                        {
-                            var sortedSlots = new List<object>();
-                            foreach (var sortedCard in sortedCards)
-                            {
-                                int idx = -1;
-                                for (int i = 0; i < slotInfos.Count; i++)
-                                {
-                                    if (AreSameIl2CppObject(slotInfos[i].Item2, sortedCard))
-                                    {
-                                        idx = i;
-                                        break;
-                                    }
-                                }
-
-                                if (idx >= 0)
-                                {
-                                    sortedSlots.Add(slotInfos[idx].Item1);
-                                    slotInfos.RemoveAt(idx);
-                                }
-                            }
-
-                            for (int i = 0; i < slotInfos.Count; i++)
-                            {
-                                sortedSlots.Add(slotInfos[i].Item1);
-                            }
-
-                            for (int i = 0; i < sortedSlots.Count; i++)
-                            {
-                                var slotObj = sortedSlots[i];
-                                if (slotObj is Component comp)
-                                {
-                                    comp.transform.SetSiblingIndex(i);
-                                }
-                            }
-
-                            if (activeSlotsObj != null)
-                            {
-                                var listType = activeSlotsObj.GetType();
-                                var clearMethod = listType.GetMethod("Clear", flags, null, Type.EmptyTypes, null);
-                                MethodInfo addMethod = null;
-                                foreach (var m in listType.GetMethods(flags))
-                                {
-                                    if (m.Name != "Add") continue;
-                                    var ps = m.GetParameters();
-                                    if (ps.Length == 1)
-                                    {
-                                        addMethod = m;
-                                        break;
-                                    }
-                                }
-
-                                if (clearMethod != null && addMethod != null)
-                                {
-                                    clearMethod.Invoke(activeSlotsObj, null);
-                                    for (int i = 0; i < sortedSlots.Count; i++)
-                                    {
-                                        addMethod.Invoke(activeSlotsObj, new object[] { sortedSlots[i] });
-                                    }
-                                }
-                            }
-
-                            if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 });
-
-                            var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
-                            if (layoutGroupObj != null)
-                            {
-                                var forceMethod = layoutGroupObj.GetType().GetMethod("ForceLayoutRefresh", flags, null, Type.EmptyTypes, null);
-                                if (forceMethod != null) forceMethod.Invoke(layoutGroupObj, null);
-                            }
-
-                        }
-                        else
-                        {
-                            LogWarningOnce("no_slots_found", "Step 6.6: No slots found; rebuilding CardSlotHolder via TryRemoveCard/AddCardToTop...");
-
-                            // 最后兜底：重建 CardSlotHolder 的可视槽位，不改模型，只重建 UI
-                            try
-                            {
-                                for (int i = 0; i < finalModelCards.Count; i++)
-                                {
-                                    try { cardGroup.TryRemoveCard(finalModelCards[i]); } catch { }
-                                }
-
-                                // 按模型顺序重建，保证 UI 重新绑定最新卡序
-                                for (int i = 0; i < finalModelCards.Count; i++)
-                                {
-                                    try { cardGroup.AddCardToTop(finalModelCards[i]); } catch { }
-                                }
-
-                                var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
-                                if (layoutGroupObj != null)
-                                {
-                                    var forceMethod = FindMethodInHierarchy(layoutGroupObj.GetType(), "ForceLayoutRefresh", flags, Type.EmptyTypes);
-                                    if (forceMethod != null) forceMethod.Invoke(layoutGroupObj, null);
-                                }
-
-                                // -1 表示不选中任何卡，避免左侧卡被抬到顶层（左上右下）
-                                if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 });
-                            }
-                            catch (Exception ex2)
-                            {
-                                LogWarningOnce("step66_rebuild_failed", "Step 6.6 rebuild failed: " + ex2.Message);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LogWarningOnce("step66_failed", "Step 6.6 failed: " + ex.Message);
-                }
+                LogWarningOnce("hard_rebuild_fallback", "Hard rebuild failed, using native refresh fallback.");
 
                 handView.SyncView();
                 try { handView.RefreshCardsUI(); } catch { }
                 try { handView.RefreshCardsUI(player); } catch { }
                 try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
-                TryNormalizeCardVisualLayering(handView);
-
-                // 某些布局会在后续帧继续调整位置，这里补两帧再归一化一次层级，避免出现“两叠牌”
-                _pendingLayerFixHandView = handView;
-                _pendingLayerFixFrames = 2;
 
                 SortCardMod.Instance.Log.LogInfo("Sort completed via Swapping + Refresh!");
             }
@@ -835,9 +601,6 @@ namespace VampireCreeperMod
 
             try
             {
-                // 原生交互刷新只作为辅助；无论成功与否，最后都再强制一次统一层级规则
-                TryRunNativeInteractionLayerRefresh(handView);
-
                 var views = new List<Nosebleed.Pancake.View.CardView>();
                 Transform pileRoot = null;
                 try { pileRoot = handView.PileRoot; } catch { }
@@ -856,7 +619,7 @@ namespace VampireCreeperMod
 
                 if (views.Count <= 1) return;
 
-                // 固定层级规则：左侧在底部，右侧在顶部（按屏幕 X 从小到大设置 sibling）
+                // 固定层级规则：仍按 X 排序，但按“右到左”回写 sibling，避免手柄左右导航反向
                 views.Sort((a, b) =>
                 {
                     float ax = a.transform.position.x;
@@ -866,7 +629,7 @@ namespace VampireCreeperMod
 
                 for (int i = 0; i < views.Count; i++)
                 {
-                    views[i].transform.SetSiblingIndex(i);
+                    views[i].transform.SetSiblingIndex(views.Count - 1 - i);
                 }
             }
             catch { }
@@ -945,7 +708,8 @@ namespace VampireCreeperMod
                     try { cardGroup.TryRemoveCard(modelOrderCards[i]); } catch { }
                 }
 
-                for (int i = 0; i < modelOrderCards.Count; i++)
+                // AddCardToTop 需要倒序插入，最终内部顺序才与模型顺序一致
+                for (int i = modelOrderCards.Count - 1; i >= 0; i--)
                 {
                     try { cardGroup.AddCardToTop(modelOrderCards[i]); } catch { }
                 }
