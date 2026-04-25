@@ -35,19 +35,58 @@ namespace VampireCreeperMod
         private static PropertyInfo _mouseScrollProp;
         private static MethodInfo _scrollReadValueMethod;
         private static object _mouseCurrent;
+        private static PropertyInfo _gamepadLeftTriggerProp;
+        private static PropertyInfo _gamepadRightTriggerProp;
+        private static MethodInfo _triggerReadValueMethod;
+        private static object _gamepadCurrent;
         private static bool _inputSystemChecked = false;
         private static bool _useNewInputSystem = false;
         private static readonly HashSet<string> _warningOnceKeys = new HashSet<string>();
         private const float ScrollTriggerCooldownSeconds = 0.25f;
+        private const float GamepadTriggerThreshold = 0.5f;
         private float _lastScrollTriggerTime = -999f;
+        private bool _wasLeftTriggerPressed = false;
+        private bool _wasRightTriggerPressed = false;
         private bool _nextSortAscending = true;
+        private Nosebleed.Pancake.View.HandPileView _pendingLayerFixHandView;
+        private int _pendingLayerFixFrames = 0;
+        private bool _pendingSecondSort = false;
+        private int _pendingSecondSortFrames = 0;
+        private bool _pendingSecondSortAscending = true;
 
         private void Update()
         {
+            if (_pendingLayerFixFrames > 0)
+            {
+                TryNormalizeCardVisualLayering(_pendingLayerFixHandView);
+                _pendingLayerFixFrames--;
+            }
+
+            if (_pendingSecondSort)
+            {
+                if (_pendingSecondSortFrames > 0)
+                {
+                    _pendingSecondSortFrames--;
+                }
+                else
+                {
+                    _pendingSecondSort = false;
+                    SortHandCards(_pendingSecondSortAscending);
+                }
+            }
+
             if (IsScrollTriggered())
             {
                 SortHandCards(_nextSortAscending);
+                ScheduleSecondSortPass(_nextSortAscending);
             }
+        }
+
+        private void ScheduleSecondSortPass(bool ascending)
+        {
+            _pendingSecondSort = true;
+            _pendingSecondSortFrames = 1;
+            _pendingSecondSortAscending = ascending;
         }
 
         private bool IsScrollTriggered()
@@ -82,6 +121,32 @@ namespace VampireCreeperMod
                             }
                         }
                     }
+
+                    Type gamepadType = null;
+                    foreach (var ass in assemblies)
+                    {
+                        if (!ass.FullName.Contains("InputSystem")) continue;
+                        gamepadType = ass.GetType("UnityEngine.InputSystem.Gamepad");
+                        if (gamepadType != null) break;
+                    }
+
+                    if (gamepadType != null)
+                    {
+                        var gamepadCurrentProp = gamepadType.GetProperty("current", BindingFlags.Public | BindingFlags.Static);
+                        _gamepadCurrent = gamepadCurrentProp?.GetValue(null);
+                        if (_gamepadCurrent != null)
+                        {
+                            _gamepadLeftTriggerProp = _gamepadCurrent.GetType().GetProperty("leftTrigger", BindingFlags.Public | BindingFlags.Instance);
+                            _gamepadRightTriggerProp = _gamepadCurrent.GetType().GetProperty("rightTrigger", BindingFlags.Public | BindingFlags.Instance);
+
+                            var leftTriggerControl = _gamepadLeftTriggerProp?.GetValue(_gamepadCurrent);
+                            if (leftTriggerControl != null)
+                            {
+                                _triggerReadValueMethod = FindMethodInHierarchy(leftTriggerControl.GetType(), "ReadValue", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes);
+                            }
+                        }
+                    }
+
                     SortCardMod.Instance.Log.LogInfo("Input system check: NewSystem=" + _useNewInputSystem);
                 }
                 catch (Exception e)
@@ -108,6 +173,11 @@ namespace VampireCreeperMod
                 catch { }
             }
 
+            if (TryTriggerSortByGamepad())
+            {
+                return true;
+            }
+
             try
             {
                 return TryTriggerSortByScroll(UnityEngine.Input.mouseScrollDelta.y);
@@ -126,6 +196,67 @@ namespace VampireCreeperMod
             // Unity 中通常 y>0 为上滑, y<0 为下滑
             // 需求: 下滑升序，上滑降序
             _nextSortAscending = scrollY < 0f;
+            return true;
+        }
+
+        private bool TryTriggerSortByGamepad()
+        {
+            bool leftPressed = false;
+            bool rightPressed = false;
+
+            try
+            {
+                if (_useNewInputSystem && _triggerReadValueMethod != null)
+                {
+                    if (_gamepadCurrent == null)
+                    {
+                        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                        foreach (var ass in assemblies)
+                        {
+                            if (!ass.FullName.Contains("InputSystem")) continue;
+                            var gamepadType = ass.GetType("UnityEngine.InputSystem.Gamepad");
+                            if (gamepadType == null) continue;
+                            var gamepadCurrentProp = gamepadType.GetProperty("current", BindingFlags.Public | BindingFlags.Static);
+                            _gamepadCurrent = gamepadCurrentProp?.GetValue(null);
+                            break;
+                        }
+                    }
+
+                    if (_gamepadCurrent != null)
+                    {
+                        var leftControl = _gamepadLeftTriggerProp != null ? _gamepadLeftTriggerProp.GetValue(_gamepadCurrent) : null;
+                        var rightControl = _gamepadRightTriggerProp != null ? _gamepadRightTriggerProp.GetValue(_gamepadCurrent) : null;
+
+                        if (TryReadFloatValue(leftControl, _triggerReadValueMethod, out var leftValue))
+                        {
+                            leftPressed = leftValue >= GamepadTriggerThreshold;
+                        }
+                        if (TryReadFloatValue(rightControl, _triggerReadValueMethod, out var rightValue))
+                        {
+                            rightPressed = rightValue >= GamepadTriggerThreshold;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            bool leftDown = leftPressed && !_wasLeftTriggerPressed;
+            bool rightDown = rightPressed && !_wasRightTriggerPressed;
+            _wasLeftTriggerPressed = leftPressed;
+            _wasRightTriggerPressed = rightPressed;
+
+            if (!leftDown && !rightDown) return false;
+            if (!CanTriggerSortByScroll()) return false;
+
+            if (rightDown)
+            {
+                // RT 升序
+                _nextSortAscending = true;
+                return true;
+            }
+
+            // LT 降序
+            _nextSortAscending = false;
             return true;
         }
 
@@ -208,21 +339,34 @@ namespace VampireCreeperMod
 
                 // 3. 排序 (对 CardModel 进行排序)
                 var sortedCards = new List<Nosebleed.Pancake.Models.CardModel>(handCards);
+                var originalIndexByPtr = new Dictionary<IntPtr, int>();
+                for (int i = 0; i < handCards.Count; i++)
+                {
+                    var ptr = GetIl2CppPtr(handCards[i]);
+                    if (ptr != IntPtr.Zero && !originalIndexByPtr.ContainsKey(ptr))
+                    {
+                        originalIndexByPtr[ptr] = i;
+                    }
+                }
+
+                int direction = ascending ? 1 : -1;
                 sortedCards.Sort((a, b) =>
                 {
                     int pA = GetSortPriority(a);
                     int pB = GetSortPriority(b);
-                    if (pA != pB) return pA.CompareTo(pB);
+                    int cmp = pA.CompareTo(pB);
+                    if (cmp != 0) return cmp * direction;
 
                     int costA = GetSortCost(a);
                     int costB = GetSortCost(b);
-                    return costA.CompareTo(costB);
-                });
+                    cmp = costA.CompareTo(costB);
+                    if (cmp != 0) return cmp * direction;
 
-                if (!ascending)
-                {
-                    sortedCards.Reverse();
-                }
+                    // 完全相同优先级时保持原相对顺序，避免升降序切换时边界抖动
+                    int indexA = GetOriginalIndex(originalIndexByPtr, handCards, a);
+                    int indexB = GetOriginalIndex(originalIndexByPtr, handCards, b);
+                    return indexA.CompareTo(indexB);
+                });
 
                 for (int targetIndex = 0; targetIndex < sortedCards.Count; targetIndex++)
                 {
@@ -335,6 +479,20 @@ namespace VampireCreeperMod
                     {
                         finalModelCards.Add(card);
                     }
+                }
+
+                // 优先使用“硬重建”保证 CardSlot/UI 层级一致，避免升降序切换后出现两叠牌
+                if (TryHardRebuildHandViewByModelOrder(handView, finalModelCards))
+                {
+                    handView.SyncView();
+                    try { handView.RefreshCardsUI(); } catch { }
+                    try { handView.RefreshCardsUI(player); } catch { }
+                    try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
+                    TryNormalizeCardVisualLayering(handView);
+                    _pendingLayerFixHandView = handView;
+                    _pendingLayerFixFrames = 2;
+                    SortCardMod.Instance.Log.LogInfo("Sort completed via hard rebuild + refresh.");
+                    return;
                 }
                 try
                 {
@@ -540,7 +698,7 @@ namespace VampireCreeperMod
                                 }
                             }
 
-                            if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { 0 });
+                            if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 });
 
                             var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
                             if (layoutGroupObj != null)
@@ -575,7 +733,8 @@ namespace VampireCreeperMod
                                     if (forceMethod != null) forceMethod.Invoke(layoutGroupObj, null);
                                 }
 
-                                if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { 0 });
+                                // -1 表示不选中任何卡，避免左侧卡被抬到顶层（左上右下）
+                                if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 });
                             }
                             catch (Exception ex2)
                             {
@@ -593,6 +752,11 @@ namespace VampireCreeperMod
                 try { handView.RefreshCardsUI(); } catch { }
                 try { handView.RefreshCardsUI(player); } catch { }
                 try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
+                TryNormalizeCardVisualLayering(handView);
+
+                // 某些布局会在后续帧继续调整位置，这里补两帧再归一化一次层级，避免出现“两叠牌”
+                _pendingLayerFixHandView = handView;
+                _pendingLayerFixFrames = 2;
 
                 SortCardMod.Instance.Log.LogInfo("Sort completed via Swapping + Refresh!");
             }
@@ -665,6 +829,145 @@ namespace VampireCreeperMod
             return false;
         }
 
+        private void TryNormalizeCardVisualLayering(Nosebleed.Pancake.View.HandPileView handView)
+        {
+            if (handView == null) return;
+
+            try
+            {
+                // 原生交互刷新只作为辅助；无论成功与否，最后都再强制一次统一层级规则
+                TryRunNativeInteractionLayerRefresh(handView);
+
+                var views = new List<Nosebleed.Pancake.View.CardView>();
+                Transform pileRoot = null;
+                try { pileRoot = handView.PileRoot; } catch { }
+
+                if (pileRoot != null)
+                {
+                    for (int i = 0; i < pileRoot.childCount; i++)
+                    {
+                        var child = pileRoot.GetChild(i);
+                        if (child == null) continue;
+
+                        var v = child.GetComponent<Nosebleed.Pancake.View.CardView>();
+                        if (v != null) views.Add(v);
+                    }
+                }
+
+                if (views.Count <= 1) return;
+
+                // 固定层级规则：左侧在底部，右侧在顶部（按屏幕 X 从小到大设置 sibling）
+                views.Sort((a, b) =>
+                {
+                    float ax = a.transform.position.x;
+                    float bx = b.transform.position.x;
+                    return ax.CompareTo(bx);
+                });
+
+                for (int i = 0; i < views.Count; i++)
+                {
+                    views[i].transform.SetSiblingIndex(i);
+                }
+            }
+            catch { }
+        }
+
+        private bool TryRunNativeInteractionLayerRefresh(Nosebleed.Pancake.View.HandPileView handView)
+        {
+            if (handView == null) return false;
+
+            try
+            {
+                var cardGroup = handView.CardGroup;
+                if (cardGroup == null) return false;
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var activeSlotsField = FindFieldInHierarchy(cardGroup.GetType(), "_activeCardSlots", flags);
+                var layoutGroupField = FindFieldInHierarchy(cardGroup.GetType(), "_layoutGroup", flags);
+                var trySetIndexMethod = FindMethodInHierarchy(cardGroup.GetType(), "TrySetLayoutGroupIndex", flags, new Type[] { typeof(int) });
+                var startedMethod = FindSingleParameterMethodInHierarchy(cardGroup.GetType(), "OnCardInteractionStarted", flags);
+                var endedMethod = FindSingleParameterMethodInHierarchy(cardGroup.GetType(), "OnCardInteractionEnded", flags);
+                var activeSlotsObj = activeSlotsField != null ? activeSlotsField.GetValue(cardGroup) : null;
+                if (activeSlotsObj == null) return false;
+
+                int touchedCount = 0;
+                foreach (var slotObj in EnumerateUnknownList(activeSlotsObj))
+                {
+                    var interactable = TryGetSlottedInteractableFromSlot(slotObj, flags);
+                    if (interactable == null) continue;
+
+                    try { startedMethod?.Invoke(cardGroup, new object[] { interactable }); } catch { }
+                    try
+                    {
+                        var forceHover = FindMethodInHierarchy(interactable.GetType(), "ForceHover", flags, Type.EmptyTypes);
+                        if (forceHover != null) forceHover.Invoke(interactable, null);
+                    }
+                    catch { }
+                    try { endedMethod?.Invoke(cardGroup, new object[] { interactable }); } catch { }
+                    touchedCount++;
+                }
+
+                if (touchedCount == 0) return false;
+
+                try { if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 }); } catch { }
+
+                var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
+                if (layoutGroupObj != null)
+                {
+                    var forceMethod = FindMethodInHierarchy(layoutGroupObj.GetType(), "ForceLayoutRefresh", flags, Type.EmptyTypes);
+                    try { forceMethod?.Invoke(layoutGroupObj, null); } catch { }
+                }
+
+                try { handView.SyncView(); } catch { }
+                try { handView.RefreshCardsUI(); } catch { }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryHardRebuildHandViewByModelOrder(
+            Nosebleed.Pancake.View.HandPileView handView,
+            List<Nosebleed.Pancake.Models.CardModel> modelOrderCards)
+        {
+            if (handView == null || modelOrderCards == null || modelOrderCards.Count == 0) return false;
+
+            try
+            {
+                var cardGroup = handView.CardGroup;
+                if (cardGroup == null) return false;
+
+                // 先移除全部，再按模型顺序重建，确保 CardSlotHolder 内部列表与层级一致
+                for (int i = 0; i < modelOrderCards.Count; i++)
+                {
+                    try { cardGroup.TryRemoveCard(modelOrderCards[i]); } catch { }
+                }
+
+                for (int i = 0; i < modelOrderCards.Count; i++)
+                {
+                    try { cardGroup.AddCardToTop(modelOrderCards[i]); } catch { }
+                }
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var layoutGroupField = FindFieldInHierarchy(cardGroup.GetType(), "_layoutGroup", flags);
+                var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
+                if (layoutGroupObj != null)
+                {
+                    var forceMethod = FindMethodInHierarchy(layoutGroupObj.GetType(), "ForceLayoutRefresh", flags, Type.EmptyTypes);
+                    if (forceMethod != null) forceMethod.Invoke(layoutGroupObj, null);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogWarningOnce("hard_rebuild_failed", "Hard rebuild hand view failed: " + ex.Message);
+                return false;
+            }
+        }
+
         private static IntPtr GetIl2CppPtr(object obj)
         {
             if (obj == null) return IntPtr.Zero;
@@ -698,6 +1001,22 @@ namespace VampireCreeperMod
             if (pa != IntPtr.Zero && pb != IntPtr.Zero) return pa == pb;
 
             return a.Equals(b);
+        }
+
+        private static int GetOriginalIndex(
+            Dictionary<IntPtr, int> originalIndexByPtr,
+            List<Nosebleed.Pancake.Models.CardModel> fallbackList,
+            Nosebleed.Pancake.Models.CardModel card)
+        {
+            if (card == null) return int.MaxValue;
+
+            var ptr = GetIl2CppPtr(card);
+            if (ptr != IntPtr.Zero && originalIndexByPtr != null && originalIndexByPtr.TryGetValue(ptr, out var idx))
+            {
+                return idx;
+            }
+
+            return fallbackList != null ? fallbackList.IndexOf(card) : int.MaxValue;
         }
 
         private static void LogWarningOnce(string key, string message)
@@ -758,6 +1077,28 @@ namespace VampireCreeperMod
             }
         }
 
+        private static object TryGetSlottedInteractableFromSlot(object slotObj, BindingFlags flags)
+        {
+            if (slotObj == null) return null;
+            try
+            {
+                var slotType = slotObj.GetType();
+                var slottedInteractableProp = slotType.GetProperty("SlottedInteractableCard", flags);
+                if (slottedInteractableProp != null)
+                {
+                    var interactable = slottedInteractableProp.GetValue(slotObj);
+                    if (interactable != null) return interactable;
+                }
+
+                var slottedInteractableField = slotType.GetField("_slottedInteractableCard", flags);
+                return slottedInteractableField != null ? slottedInteractableField.GetValue(slotObj) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static FieldInfo FindFieldInHierarchy(Type type, string fieldName, BindingFlags flags)
         {
             for (var t = type; t != null; t = t.BaseType)
@@ -774,6 +1115,22 @@ namespace VampireCreeperMod
             {
                 var m = t.GetMethod(methodName, flags, null, parameterTypes, null);
                 if (m != null) return m;
+            }
+            return null;
+        }
+
+        private static MethodInfo FindSingleParameterMethodInHierarchy(Type type, string methodName, BindingFlags flags)
+        {
+            for (var t = type; t != null; t = t.BaseType)
+            {
+                var methods = t.GetMethods(flags);
+                for (int i = 0; i < methods.Length; i++)
+                {
+                    var m = methods[i];
+                    if (m.Name != methodName) continue;
+                    var ps = m.GetParameters();
+                    if (ps != null && ps.Length == 1) return m;
+                }
             }
             return null;
         }
@@ -812,6 +1169,31 @@ namespace VampireCreeperMod
                         y = fy2;
                         return true;
                     }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static bool TryReadFloatValue(object control, MethodInfo readValueMethod, out float value)
+        {
+            value = 0f;
+            if (control == null || readValueMethod == null) return false;
+
+            try
+            {
+                var raw = readValueMethod.Invoke(control, null);
+                if (raw is float f)
+                {
+                    value = f;
+                    return true;
+                }
+
+                if (raw != null)
+                {
+                    value = Convert.ToSingle(raw);
+                    return true;
                 }
             }
             catch { }
