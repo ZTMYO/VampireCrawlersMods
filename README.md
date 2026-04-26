@@ -51,6 +51,7 @@
 
 > 首次启动说明：第一次启动游戏时，BepInEx IL2CPP 会自动下载 Unity 基础库并生成互操作文件，可能需要等待一段时间（通常几十秒到几分钟）。
 > 期间日志出现 `Downloading unity base libraries`、`Extracting unity base libraries`、`Running Cpp2IL`、`Creating application model` 都是正常现象，请耐心等待完成，不要中途强退。
+> 显示建议：推荐使用 `1920x1080` + `窗口化` 游玩，HUD 显示位置和观感更稳定。
 
 ![游戏路径参考图](docImg/pathImg.png)
 *安装参考：将文件放入上图所示的游戏根目录*
