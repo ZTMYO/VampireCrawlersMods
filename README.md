@@ -1,13 +1,13 @@
 # 吸血鬼爬行者 Mod 合集
 
 这是一个为游戏《吸血鬼爬行者》(Vampire Crawlers) 制作的 BepInEx IL2CPP Mod 合集仓库。  
-当前包含 2 个实用 Mod：敌人总血量显示 + 手牌排序。
+当前包含 3 个实用 Mod：敌人总血量显示 + 手牌排序 + MoreInfo 信息显示。
 
 ## Mod 一览
 
 ### 敌人总血量显示 Mod
 
-![敌人总血量显示演示](img1.gif)
+![敌人总血量显示演示](docImg/img1.gif)
 
 - 在战斗界面顶部显示所有敌人的总血量与百分比。
 - 血条扣除带平滑动画，观感更自然。
@@ -16,42 +16,49 @@
 
 ### 手牌排序 Mod
 
-![手牌滚轮排序演示](img2.gif)
+![手牌滚轮排序演示](docImg/img2.gif)
 
 - 鼠标触发：下滑升序，上滑降序。
 - 手柄触发：`RT` 升序，`LT` 降序。
 - 防误触：按下 `Esc`、暂停界面或设置面板打开时不触发。
 - 防抖节流：滚轮触发有冷却，避免大幅滚动导致高频重复排序。
 - 规则补充：`free` 牌按牌面值参与排序。
-- 额外功能：选中碎裂牌时，会在屏幕左下角显示“可打出次数”。
-- 显示规则：前三次打出前不显示；从第四次打出前开始显示。
-- 数值规则：普通牌按 `x/1` 显示；带“坚不可摧（Unbreakable）”宝石的牌按 `x/3` 显示。
 
+### MoreInfo 信息显示 Mod
+
+![MoreInfo 信息显示演示](docImg/img3.png)
+
+- 显示“可连击法力”辅助玩家快速找到可触发连击的牌。
+- 悬停选中碎裂牌时，显示“可打出次数”辅助玩家确定裂纹牌的剩余打出次数。
 
 ## 🛠️ 安装方法
 
 > 请先自行安装指定版本：`BepInEx-Unity.IL2CPP-*-6.0.0-be.755+3fab71a`。
 
-1. 先安装 BepInEx（按你的系统下载并解压到游戏根目录）：
+1. 先下载并解压 BepInEx 压缩包（按你的系统选择）：
    - Windows x64：  
      [BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755+3fab71a.zip](https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip)
    - macOS x64：  
      [BepInEx-Unity.IL2CPP-macos-x64-6.0.0-be.755+3fab71a.zip](https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-macos-x64-6.0.0-be.755%2B3fab71a.zip)
    - 其他平台/版本总览：  
      [BepInEx Bleeding Edge 下载总站](https://builds.bepinex.dev/projects/bepinex_be)
-2. 将本仓库 `plugins/` 目录下的 `*.dll` 复制到游戏目录的 `BepInEx/plugins/` 中。
-3. 启动游戏进入战斗即可生效。
+2. 解压后你会得到一个外层文件夹（例如 `BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755+3fab71a`）。
+3. 打开这个外层文件夹，把“里面的所有文件和文件夹”复制到游戏根目录（不要把这个外层文件夹本身直接丢进游戏目录）。
+4. 正确结果通常是游戏根目录同时有：`BepInEx/`、`dotnet/`、`winhttp.dll`、`doorstop_config.ini`、`.doorstop_version`。
+5. 将本仓库 `plugins/` 目录下的 `*.dll` 复制到游戏目录的 `BepInEx/plugins/` 中。
+6. 启动游戏进入战斗即可生效。
 
-![游戏路径参考图](pathImg.png)
+> 首次启动说明：第一次启动游戏时，BepInEx IL2CPP 会自动下载 Unity 基础库并生成互操作文件，可能需要等待一段时间（通常几十秒到几分钟）。
+> 期间日志出现 `Downloading unity base libraries`、`Extracting unity base libraries`、`Running Cpp2IL`、`Creating application model` 都是正常现象，请耐心等待完成，不要中途强退。
+
+![游戏路径参考图](docImg/pathImg.png)
 *安装参考：将文件放入上图所示的游戏根目录*
 
 ## 📂 项目结构
 
-- `plugins/`：已编译的 Mod 插件（`ShowEnemyHpMod.dll`、`SortCardMod.dll`）。
-- `源码/`：Mod C# 源码（`ShowEnemyHpMod.cs`、`SortCardMod.cs`）。
-- `img1.gif`：敌人总血量显示 Mod 演示图。
-- `img2.gif`：手牌滚轮排序 Mod 演示图。
-- `pathImg.png`：游戏根目录与安装路径参考图。
+- `plugins/`：已编译的 Mod 插件（`ShowEnemyHpMod.dll`、`SortCardMod.dll`、`MoreInfoMod.dll`）。
+- `源码/`：Mod C# 源码（`ShowEnemyHpMod.cs`、`SortCardMod.cs`、`MoreInfoMod.cs`）。
+- `docImg/`：文档图片目录（`img1.gif`、`img2.gif`、`img3.png`、`pathImg.png`）。
 - `【安装必看】使用本 Mod 必须先手动安装指定版 BepInEx 框架！.txt`：纯文本安装说明与常见问题。
 
 ## 👨‍💻 开发说明

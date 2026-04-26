@@ -7,10 +7,14 @@
 BepInEx-Unity.IL2CPP-*-6.0.0-be.755+3fab71a
 
 重要：
-安装 BepInEx 时请把压缩包内容“整包解压到游戏根目录”，不是只放一个 BepInEx 文件夹。
+下载压缩包后，先解压会得到一个外层文件夹（例如：
+BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755+3fab71a）。
+请打开这个外层文件夹，把“里面的所有文件和文件夹”复制到游戏根目录，
+不是把外层文件夹本身放进去，也不是只放一个 BepInEx 文件夹。
 正确结果通常同时包含：
 1) 根目录下的单文件（例如 winhttp.dll、doorstop_config.ini、.doorstop_version）
 2) 根目录下的 BepInEx 文件夹
+3) 根目录下的 dotnet 文件夹
 如果只复制了 BepInEx 文件夹，Mod 可能无法正常加载。
 
 下载链接（与 README 一致）：
@@ -25,7 +29,15 @@ https://builds.bepinex.dev/projects/bepinex_be
 
 二、Mod 文件放置位置
 把本仓库 plugins 文件夹里的 dll 文件复制到：
-游戏根目录（\steam\steamapps\common\Vampire Crawlers）
+游戏根目录下的 BepInEx\plugins（\steam\steamapps\common\Vampire Crawlers\BepInEx\plugins）
+
+三、首次启动可能会等待较久（正常）
+首次启动游戏时，BepInEx IL2CPP 可能会自动下载 Unity 基础库并生成互操作文件。
+日志里出现以下内容一般都属于正常过程，请耐心等待，不要中途强退：
+- Downloading unity base libraries
+- Extracting unity base libraries
+- Running Cpp2IL
+- Creating application model
 
 使用 Mod 前建议备份存档。
 本文件是纯文本简版说明，完整更新说明请看 README.md。
