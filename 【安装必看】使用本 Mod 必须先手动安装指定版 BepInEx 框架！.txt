@@ -30,6 +30,7 @@ https://builds.bepinex.dev/projects/bepinex_be
 二、Mod 文件放置位置
 把本仓库 plugins 文件夹里的 dll 文件复制到：
 游戏根目录下的 BepInEx\plugins（\steam\steamapps\common\Vampire Crawlers\BepInEx\plugins）
+【关键提示】若下载后的 dll 文件名被单引号包裹，请先去掉单引号再放入 plugins。
 
 三、首次启动可能会等待较久（正常）
 首次启动游戏时，BepInEx IL2CPP 可能会自动下载 Unity 基础库并生成互操作文件。
