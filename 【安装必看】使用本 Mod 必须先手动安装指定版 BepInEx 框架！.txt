@@ -1,0 +1,31 @@
+吸血鬼爬行者 Mod 安装与使用说明
+（请先看这个文件，很多问题都能直接解决）
+
+一、必须先安装 BepInEx
+本仓库 Mod 依赖 BepInEx IL2CPP 版本运行。
+推荐版本：
+BepInEx-Unity.IL2CPP-*-6.0.0-be.755+3fab71a
+
+重要：
+安装 BepInEx 时请把压缩包内容“整包解压到游戏根目录”，不是只放一个 BepInEx 文件夹。
+正确结果通常同时包含：
+1) 根目录下的单文件（例如 winhttp.dll、doorstop_config.ini、.doorstop_version）
+2) 根目录下的 BepInEx 文件夹
+如果只复制了 BepInEx 文件夹，Mod 可能无法正常加载。
+
+下载链接（与 README 一致）：
+Windows x64
+https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip
+
+macOS x64
+https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-macos-x64-6.0.0-be.755%2B3fab71a.zip
+
+其他平台/版本总览
+https://builds.bepinex.dev/projects/bepinex_be
+
+二、Mod 文件放置位置
+把本仓库 plugins 文件夹里的 dll 文件复制到：
+游戏根目录（\steam\steamapps\common\Vampire Crawlers）
+
+使用 Mod 前建议备份存档。
+本文件是纯文本简版说明，完整更新说明请看 README.md。
