@@ -26,7 +26,7 @@ namespace VampireCreeperMod
             go.hideFlags = UnityEngine.HideFlags.HideAndDontSave;
             go.AddComponent<CardSorter>();
 
-            Log.LogInfo("SortCardMod loaded successfully!");
+            Log.LogInfo("Sort Card Mod loaded.");
         }
     }
 
@@ -53,6 +53,11 @@ namespace VampireCreeperMod
         private bool _pendingSecondSort = false;
         private int _pendingSecondSortFrames = 0;
         private bool _pendingSecondSortAscending = true;
+        private string _crackHudText;
+        private bool _showCrackHud;
+        private bool _crackHudIsLastPlay;
+        private GUIStyle _crackHudStyle;
+        private float _nextCrackHudDebugLogTime = 0f;
 
         private void Update()
         {
@@ -74,6 +79,8 @@ namespace VampireCreeperMod
                 SortHandCards(_nextSortAscending);
                 ScheduleSecondSortPass(_nextSortAscending);
             }
+
+            UpdateCrackHudInfo();
         }
 
         private void ScheduleSecondSortPass(bool ascending)
@@ -81,6 +88,246 @@ namespace VampireCreeperMod
             _pendingSecondSort = true;
             _pendingSecondSortFrames = 1;
             _pendingSecondSortAscending = ascending;
+        }
+
+        private void OnGUI()
+        {
+            if (!_showCrackHud || string.IsNullOrEmpty(_crackHudText)) return;
+
+            if (_crackHudStyle == null)
+            {
+                _crackHudStyle = new GUIStyle(GUI.skin.label);
+                _crackHudStyle.fontSize = 22;
+                _crackHudStyle.fontStyle = FontStyle.Bold;
+            }
+
+            _crackHudStyle.normal.textColor = _crackHudIsLastPlay
+                ? new Color(1f, 0.25f, 0.25f, 1f)
+                : new Color(254f / 255f, 254f / 255f, 254f / 255f, 1f);
+
+            var rect = new Rect(16f, Screen.height - 64f, 900f, 40f);
+            GUI.Label(rect, new GUIContent(_crackHudText), _crackHudStyle);
+        }
+
+        private void UpdateCrackHudInfo()
+        {
+            _showCrackHud = false;
+            _crackHudText = null;
+            _crackHudIsLastPlay = false;
+
+            try
+            {
+                var player = UnityEngine.Object.FindFirstObjectByType<Nosebleed.Pancake.Models.PlayerModel>();
+                var handView = player?.HandPile?.View;
+                var cardGroup = handView?.CardGroup;
+                if (cardGroup == null)
+                {
+                    TryLogCrackHudDebug("HUD: CardGroup 未就绪。");
+                    return;
+                }
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var activeSlotsField = FindFieldInHierarchy(cardGroup.GetType(), "_activeCardSlots", flags);
+                var activeSlotsObj = activeSlotsField != null ? activeSlotsField.GetValue(cardGroup) : null;
+                if (activeSlotsObj == null)
+                {
+                    TryLogCrackHudDebug("HUD: _activeCardSlots 为空。");
+                }
+
+                Nosebleed.Pancake.View.CardView selectedView = null;
+                if (activeSlotsObj != null)
+                {
+                    foreach (var slotObj in EnumerateUnknownList(activeSlotsObj))
+                    {
+                        var interactable = TryGetSlottedInteractableFromSlot(slotObj, flags);
+                        if (interactable == null) continue;
+                        if (!TryIsInteractableSelected(interactable, flags)) continue;
+
+                        selectedView = TryGetCardViewFromInteractable(interactable, flags);
+                        if (selectedView != null) break;
+                    }
+                }
+
+                if (selectedView == null)
+                {
+                    try
+                    {
+                        var currentInteractedField = FindFieldInHierarchy(cardGroup.GetType(), "_currentlyInteractedCard", flags);
+                        var currentInteracted = currentInteractedField != null ? currentInteractedField.GetValue(cardGroup) : null;
+                        selectedView = TryGetCardViewFromInteractable(currentInteracted, flags);
+                    }
+                    catch { }
+                }
+
+                if (selectedView == null)
+                {
+                    try
+                    {
+                        var currentInteracted = Nosebleed.Pancake.GameLogic.SelectedCardManager.CurrentInteractedCard;
+                        if (currentInteracted != null)
+                        {
+                            selectedView = currentInteracted.CardView;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (selectedView == null)
+                {
+                    selectedView = TryFindSelectedCardViewFromPileRoot(handView);
+                }
+
+                if (selectedView == null)
+                {
+                    TryLogCrackHudDebug("HUD: 未找到当前选中牌。");
+                    return;
+                }
+
+                var breakable = selectedView.GetComponent<Nosebleed.Pancake.GameLogic.BreakableCard>();
+                if (breakable == null) breakable = selectedView.GetComponentInChildren<Nosebleed.Pancake.GameLogic.BreakableCard>(true);
+                if (breakable == null)
+                {
+                    TryLogCrackHudDebug("HUD: 当前选中牌没有 BreakableCard 组件。");
+                    return;
+                }
+
+                int played = breakable.TimesPlayedThisTurn;
+                int totalPlayable = 4;
+                bool hasUncrackableGem = false;
+                if (TryHasUncrackableGem(selectedView, out hasUncrackableGem) && hasUncrackableGem)
+                {
+                    totalPlayable = 6;
+                }
+
+                if (played < 3)
+                {
+                    TryLogCrackHudDebug("HUD: 计数<3，按规则不显示。");
+                    return;
+                }
+
+                int remainingPlayable = Math.Max(0, totalPlayable - played);
+                int displayTotalPlayable = Math.Max(1, totalPlayable - 3);
+                _crackHudText = "可打出次数：" + remainingPlayable + "/" + displayTotalPlayable;
+                _crackHudIsLastPlay = remainingPlayable == 0;
+                _showCrackHud = true;
+                TryLogCrackHudDebug("HUD: 显示成功 -> " + _crackHudText);
+            }
+            catch (Exception ex)
+            {
+                TryLogCrackHudDebug("HUD 异常: " + ex.Message);
+            }
+        }
+
+        private void TryLogCrackHudDebug(string message)
+        {
+        }
+
+        private static bool TryGetCardCrackMeta(out int threshold, out int crackingStages)
+        {
+            threshold = 0;
+            crackingStages = 1;
+            try
+            {
+                var gc = Nosebleed.Pancake.GameConfig.GlobalConfig.Instance;
+                if (gc == null) return false;
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var gcType = gc.GetType();
+
+                object crackConfigObj = null;
+                var crackConfigField = FindFieldInHierarchy(gcType, "cardCrackConfig", flags);
+                if (crackConfigField != null)
+                {
+                    crackConfigObj = crackConfigField.GetValue(gc);
+                }
+                else
+                {
+                    var crackConfigProp = gcType.GetProperty("cardCrackConfig", flags);
+                    if (crackConfigProp != null)
+                    {
+                        crackConfigObj = crackConfigProp.GetValue(gc);
+                    }
+                }
+
+                if (crackConfigObj == null)
+                {
+                    var fields = gcType.GetFields(flags);
+                    for (int i = 0; i < fields.Length; i++)
+                    {
+                        var fv = fields[i].GetValue(gc);
+                        if (TryReadCardCrackConfig(fv, out threshold, out crackingStages)) return true;
+                    }
+
+                    var props = gcType.GetProperties(flags);
+                    for (int i = 0; i < props.Length; i++)
+                    {
+                        object pv = null;
+                        try { pv = props[i].GetValue(gc); } catch { }
+                        if (TryReadCardCrackConfig(pv, out threshold, out crackingStages)) return true;
+                    }
+                }
+                else
+                {
+                    if (TryReadCardCrackConfig(crackConfigObj, out threshold, out crackingStages)) return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static bool TryReadCardCrackConfig(object crackConfigObj, out int threshold, out int crackingStages)
+        {
+            threshold = 0;
+            crackingStages = 1;
+            if (crackConfigObj == null) return false;
+
+            try
+            {
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var cfgType = crackConfigObj.GetType();
+                var thresholdField = FindFieldInHierarchy(cfgType, "timesPlayedToStartCracking", flags);
+                if (thresholdField != null)
+                {
+                    var v = thresholdField.GetValue(crackConfigObj);
+                    if (v is int fi)
+                    {
+                        threshold = fi;
+                    }
+                }
+
+                var thresholdProp = cfgType.GetProperty("timesPlayedToStartCracking", flags);
+                if (threshold <= 0 && thresholdProp != null)
+                {
+                    var v = thresholdProp.GetValue(crackConfigObj);
+                    if (v is int pi)
+                    {
+                        threshold = pi;
+                    }
+                }
+
+                var stagesField = FindFieldInHierarchy(cfgType, "crackingStages", flags);
+                if (stagesField != null)
+                {
+                    var v = stagesField.GetValue(crackConfigObj);
+                    if (v is int si && si > 0)
+                    {
+                        crackingStages = si;
+                    }
+                }
+
+                var stagesProp = cfgType.GetProperty("crackingStages", flags);
+                if (stagesProp != null)
+                {
+                    var v = stagesProp.GetValue(crackConfigObj);
+                    if (v is int spi && spi > 0)
+                    {
+                        crackingStages = spi;
+                    }
+                }
+            }
+            catch { }
+            return threshold > 0 && crackingStages > 0;
         }
 
         private bool IsScrollTriggered()
@@ -141,7 +388,6 @@ namespace VampireCreeperMod
                         }
                     }
 
-                    SortCardMod.Instance.Log.LogInfo("Input system check: NewSystem=" + _useNewInputSystem);
                 }
                 catch (Exception e)
                 {
@@ -187,7 +433,7 @@ namespace VampireCreeperMod
             if (Math.Abs(scrollY) <= 0.01f) return false;
             if (!CanTriggerSortByScroll()) return false;
 
-            _nextSortAscending = scrollY < 0f;
+            _nextSortAscending = scrollY > 0f;
             return true;
         }
 
@@ -514,7 +760,6 @@ namespace VampireCreeperMod
                     try { handView.RefreshCardsUI(); } catch { }
                     try { handView.RefreshCardsUI(player); } catch { }
                     try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
-                    SortCardMod.Instance.Log.LogInfo("Sort completed via hard rebuild + refresh.");
                     return;
                 }
                 LogWarningOnce("hard_rebuild_fallback", "Hard rebuild failed, using native refresh fallback.");
@@ -524,7 +769,6 @@ namespace VampireCreeperMod
                 try { handView.RefreshCardsUI(player); } catch { }
                 try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
 
-                SortCardMod.Instance.Log.LogInfo("Sort completed via Swapping + Refresh!");
             }
             catch (Exception ex)
             {
@@ -536,8 +780,8 @@ namespace VampireCreeperMod
         {
             try
             {
-                int totalModifier = card.ManaCostModifier + card.TempManaCostModifier + card.ReducedCostModifier;
-                return card.GetCardCostTypeManaCost(totalModifier, false);
+                // Let game runtime compute final mana cost (includes gem modifiers and runtime effects).
+                return card.GetCardCostTypeManaCost();
             }
             catch
             {
@@ -566,15 +810,111 @@ namespace VampireCreeperMod
                 if (!IsWildCard(card) && card.IsCardFreeToPlay())
                 {
                     var baseConfig = card.BaseCardConfig;
-                    if (baseConfig != null) return baseConfig.GetManaCost();
+                    int baseCost;
+                    if (baseConfig != null) baseCost = baseConfig.GetManaCost();
+                    else
+                    {
+                        var cfg = card.CardConfig;
+                        if (cfg == null) return GetActualCost(card);
+                        baseCost = cfg.GetManaCost();
+                    }
 
-                    var cfg = card.CardConfig;
-                    if (cfg != null) return cfg.GetManaCost();
+                    if (TryGetGemManaModifierSum(card, out var gemManaModifier))
+                    {
+                        return baseCost + gemManaModifier;
+                    }
+
+                    return baseCost;
                 }
             }
             catch { }
 
             return GetActualCost(card);
+        }
+
+        private static bool TryGetGemManaModifierSum(Nosebleed.Pancake.Models.CardModel card, out int totalGemManaModifier)
+        {
+            totalGemManaModifier = 0;
+            if (card == null) return false;
+
+            try
+            {
+                var gemsModel = card.CardGemsModel;
+                if (gemsModel == null) gemsModel = card.CardGems;
+                if (gemsModel == null) return false;
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var gemsType = gemsModel.GetType();
+                var gemManaModifiersField = FindFieldInHierarchy(gemsType, "_gemManaModifiers", flags);
+                var dictObj = gemManaModifiersField != null ? gemManaModifiersField.GetValue(gemsModel) : null;
+                if (dictObj == null) return false;
+
+                // Prefer iterating dictionary values (GemManaModifierInfo) directly.
+                object valuesObj = null;
+                var valuesProp = dictObj.GetType().GetProperty("Values", flags);
+                if (valuesProp != null)
+                {
+                    valuesObj = valuesProp.GetValue(dictObj);
+                }
+
+                var source = valuesObj ?? dictObj;
+                foreach (var rawObj in EnumerateUnknownList(source))
+                {
+                    if (rawObj == null) continue;
+
+                    object infoObj = rawObj;
+                    var valueProp = rawObj.GetType().GetProperty("Value", flags);
+                    if (valueProp != null)
+                    {
+                        var maybeInfo = valueProp.GetValue(rawObj);
+                        if (maybeInfo != null) infoObj = maybeInfo;
+                    }
+
+                    var infoType = infoObj.GetType();
+                    int amount = 0;
+                    int count = 1;
+
+                    var amountField = FindFieldInHierarchy(infoType, "Amount", flags);
+                    if (amountField != null)
+                    {
+                        var v = amountField.GetValue(infoObj);
+                        if (v is int ai) amount = ai;
+                    }
+                    else
+                    {
+                        var amountProp = infoType.GetProperty("Amount", flags);
+                        if (amountProp != null)
+                        {
+                            var v = amountProp.GetValue(infoObj);
+                            if (v is int ai) amount = ai;
+                        }
+                    }
+
+                    var countField = FindFieldInHierarchy(infoType, "Count", flags);
+                    if (countField != null)
+                    {
+                        var v = countField.GetValue(infoObj);
+                        if (v is int ci) count = ci;
+                    }
+                    else
+                    {
+                        var countProp = infoType.GetProperty("Count", flags);
+                        if (countProp != null)
+                        {
+                            var v = countProp.GetValue(infoObj);
+                            if (v is int ci) count = ci;
+                        }
+                    }
+
+                    totalGemManaModifier += amount * count;
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private bool IsWildCard(Nosebleed.Pancake.Models.CardModel card)
@@ -693,7 +1033,7 @@ namespace VampireCreeperMod
 
         private bool TryHardRebuildHandViewByModelOrder(
             Nosebleed.Pancake.View.HandPileView handView,
-            List<Nosebleed.Pancake.Models.CardModel> modelOrderCards)
+            System.Collections.IList modelOrderCards)
         {
             if (handView == null || modelOrderCards == null || modelOrderCards.Count == 0) return false;
 
@@ -705,13 +1045,17 @@ namespace VampireCreeperMod
                 // 先移除全部，再按模型顺序重建，确保 CardSlotHolder 内部列表与层级一致
                 for (int i = 0; i < modelOrderCards.Count; i++)
                 {
-                    try { cardGroup.TryRemoveCard(modelOrderCards[i]); } catch { }
+                    var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
+                    if (card == null) continue;
+                    try { cardGroup.TryRemoveCard(card); } catch { }
                 }
 
                 // AddCardToTop 需要倒序插入，最终内部顺序才与模型顺序一致
                 for (int i = modelOrderCards.Count - 1; i >= 0; i--)
                 {
-                    try { cardGroup.AddCardToTop(modelOrderCards[i]); } catch { }
+                    var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
+                    if (card == null) continue;
+                    try { cardGroup.AddCardToTop(card); } catch { }
                 }
 
                 var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
@@ -769,7 +1113,7 @@ namespace VampireCreeperMod
 
         private static int GetOriginalIndex(
             Dictionary<IntPtr, int> originalIndexByPtr,
-            List<Nosebleed.Pancake.Models.CardModel> fallbackList,
+            System.Collections.IList fallbackList,
             Nosebleed.Pancake.Models.CardModel card)
         {
             if (card == null) return int.MaxValue;
@@ -816,6 +1160,147 @@ namespace VampireCreeperMod
                     if (item != null) yield return item;
                 }
             }
+        }
+
+        private static bool TryIsInteractableSelected(object interactable, BindingFlags flags)
+        {
+            if (interactable == null) return false;
+            try
+            {
+                var t = interactable.GetType();
+                var isSelectedProp = t.GetProperty("IsSelected", flags);
+                if (isSelectedProp != null)
+                {
+                    var v = isSelectedProp.GetValue(interactable);
+                    if (v is bool b) return b;
+                }
+
+                var isSelectedField = t.GetField("_isSelected", flags);
+                if (isSelectedField != null)
+                {
+                    var v = isSelectedField.GetValue(interactable);
+                    if (v is bool b) return b;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static Nosebleed.Pancake.View.CardView TryGetCardViewFromInteractable(object interactable, BindingFlags flags)
+        {
+            if (interactable == null) return null;
+            try
+            {
+                var t = interactable.GetType();
+                var cardViewProp = t.GetProperty("CardView", flags);
+                if (cardViewProp != null)
+                {
+                    var v = cardViewProp.GetValue(interactable) as Nosebleed.Pancake.View.CardView;
+                    if (v != null) return v;
+                }
+
+                var cardViewField = t.GetField("_cardView", flags);
+                if (cardViewField != null)
+                {
+                    return cardViewField.GetValue(interactable) as Nosebleed.Pancake.View.CardView;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static Nosebleed.Pancake.View.CardView TryFindSelectedCardViewFromPileRoot(Nosebleed.Pancake.View.HandPileView handView)
+        {
+            if (handView == null) return null;
+            try
+            {
+                var pileRoot = handView.PileRoot;
+                if (pileRoot == null) return null;
+
+                for (int i = 0; i < pileRoot.childCount; i++)
+                {
+                    var child = pileRoot.GetChild(i);
+                    if (child == null) continue;
+
+                    var interactable = child.GetComponentInChildren<Nosebleed.Pancake.GameLogic.InteractableCard>(true);
+                    if (interactable == null) continue;
+                    if (!interactable.IsSelected) continue;
+
+                    if (interactable.CardView != null) return interactable.CardView;
+                    var view = child.GetComponentInChildren<Nosebleed.Pancake.View.CardView>(true);
+                    if (view != null) return view;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static bool TryHasUncrackableGem(Nosebleed.Pancake.View.CardView cardView, out bool hasUncrackableGem)
+        {
+            hasUncrackableGem = false;
+            if (cardView == null) return false;
+
+            try
+            {
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                object cardModelObj = null;
+
+                try { cardModelObj = cardView.CardModel; } catch { }
+                if (cardModelObj == null)
+                {
+                    var viewType = cardView.GetType();
+                    var cardModelProp = viewType.GetProperty("CardModel", flags);
+                    if (cardModelProp != null) cardModelObj = cardModelProp.GetValue(cardView);
+                    if (cardModelObj == null)
+                    {
+                        var cardModelField = FindFieldInHierarchy(viewType, "_cardModel", flags);
+                        if (cardModelField != null) cardModelObj = cardModelField.GetValue(cardView);
+                    }
+                }
+                if (cardModelObj == null) return false;
+
+                object gemsObj = null;
+                var modelType = cardModelObj.GetType();
+                var gemsModelProp = modelType.GetProperty("CardGemsModel", flags);
+                if (gemsModelProp != null) gemsObj = gemsModelProp.GetValue(cardModelObj);
+                if (gemsObj == null)
+                {
+                    var gemsProp = modelType.GetProperty("CardGems", flags);
+                    if (gemsProp != null) gemsObj = gemsProp.GetValue(cardModelObj);
+                }
+                if (gemsObj == null)
+                {
+                    var gemsField = FindFieldInHierarchy(modelType, "_cardGemsModel", flags);
+                    if (gemsField != null) gemsObj = gemsField.GetValue(cardModelObj);
+                }
+                if (gemsObj == null) return false;
+
+                var gemsType = gemsObj.GetType();
+                var hasGemProp = gemsType.GetProperty("HasUncrackableGem", flags);
+                if (hasGemProp != null)
+                {
+                    var v = hasGemProp.GetValue(gemsObj);
+                    if (v is bool b1)
+                    {
+                        hasUncrackableGem = b1;
+                        return true;
+                    }
+                }
+
+                var hasGemField = FindFieldInHierarchy(gemsType, "_hasUncrackableGem", flags);
+                if (hasGemField != null)
+                {
+                    var v = hasGemField.GetValue(gemsObj);
+                    if (v is bool b2)
+                    {
+                        hasUncrackableGem = b2;
+                        return true;
+                    }
+                }
+            }
+            catch { }
+
+            return false;
         }
 
         private static Nosebleed.Pancake.Models.CardModel TryGetCardModelFromSlot(object slotObj, BindingFlags flags)

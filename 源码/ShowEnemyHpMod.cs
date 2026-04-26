@@ -82,7 +82,7 @@ namespace ShowEnemyHpMod
         public override void Load()
         {
             Instance = this;
-            Log.LogInfo("✅ 敌人血量Mod已加载！");
+            Log.LogInfo("Enemy HP Display Mod loaded.");
 
             // 0. 注册自定义 MonoBehaviour 类型
             ClassInjector.RegisterTypeInIl2Cpp<HpUiRunner>();
@@ -111,7 +111,7 @@ namespace ShowEnemyHpMod
             bootstrapper.AddComponent<HpUiRunner>();
             Object.DontDestroyOnLoad(bootstrapper);
 
-            Log.LogInfo("✅ 血条 UI 已就绪");
+            Log.LogInfo("Enemy HP UI ready.");
         }
 
         // 辅助方法：创建纯色纹理
@@ -173,7 +173,7 @@ namespace ShowEnemyHpMod
             public static void Postfix(EnemyEncounterModel __instance)
             {
                 Instance.CapturedEncounter = __instance;
-                Instance.Log.LogInfo("✅ 已捕捉到战斗模型: " + __instance.name);
+                Instance.Log.LogInfo("Encounter captured: " + __instance.name);
             }
         }
 
