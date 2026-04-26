@@ -760,6 +760,7 @@ namespace VampireCreeperMod
                     try { handView.RefreshCardsUI(); } catch { }
                     try { handView.RefreshCardsUI(player); } catch { }
                     try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
+                    TryFixCardFocusDirection(handView);
                     return;
                 }
                 LogWarningOnce("hard_rebuild_fallback", "Hard rebuild failed, using native refresh fallback.");
@@ -768,6 +769,7 @@ namespace VampireCreeperMod
                 try { handView.RefreshCardsUI(); } catch { }
                 try { handView.RefreshCardsUI(player); } catch { }
                 try { player.HandPile.DEBUG_UpdateCardsInHand(); } catch { }
+                TryFixCardFocusDirection(handView);
 
             }
             catch (Exception ex)
@@ -975,6 +977,118 @@ namespace VampireCreeperMod
             catch { }
         }
 
+        private void TryFixCardFocusDirection(Nosebleed.Pancake.View.HandPileView handView)
+        {
+            if (handView == null) return;
+
+            try
+            {
+                var cardGroup = handView.CardGroup;
+                if (cardGroup == null) return;
+
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var activeSlotsField = FindFieldInHierarchy(cardGroup.GetType(), "_activeCardSlots", flags);
+                var activeSlotsObj = activeSlotsField != null ? activeSlotsField.GetValue(cardGroup) : null;
+                if (activeSlotsObj == null) return;
+
+                var slots = new List<object>();
+                foreach (var slotObj in EnumerateUnknownList(activeSlotsObj))
+                {
+                    if (slotObj != null) slots.Add(slotObj);
+                }
+                if (slots.Count <= 1) return;
+
+                float firstX = 0f;
+                float lastX = 0f;
+                bool firstFound = false;
+                bool lastFound = false;
+
+                for (int i = 0; i < slots.Count; i++)
+                {
+                    if (!TryGetCardViewXFromSlot(slots[i], flags, out var x)) continue;
+                    firstX = x;
+                    firstFound = true;
+                    break;
+                }
+
+                for (int i = slots.Count - 1; i >= 0; i--)
+                {
+                    if (!TryGetCardViewXFromSlot(slots[i], flags, out var x)) continue;
+                    lastX = x;
+                    lastFound = true;
+                    break;
+                }
+
+                if (!firstFound || !lastFound) return;
+
+                // firstX > lastX means slot list is right-to-left; reverse to align with visual left-to-right.
+                if (firstX <= lastX) return;
+
+                if (activeSlotsObj is System.Collections.IList ilist)
+                {
+                    int i = 0;
+                    int j = ilist.Count - 1;
+                    while (i < j)
+                    {
+                        var tmp = ilist[i];
+                        ilist[i] = ilist[j];
+                        ilist[j] = tmp;
+                        i++;
+                        j--;
+                    }
+                }
+                else
+                {
+                    var listType = activeSlotsObj.GetType();
+                    var countProp = listType.GetProperty("Count", flags);
+                    var itemProp = listType.GetProperty("Item", flags);
+                    if (countProp == null || itemProp == null || !itemProp.CanWrite) return;
+
+                    int count;
+                    try { count = (int)countProp.GetValue(activeSlotsObj); } catch { return; }
+                    int i = 0;
+                    int j = count - 1;
+                    while (i < j)
+                    {
+                        object a;
+                        object b;
+                        try { a = itemProp.GetValue(activeSlotsObj, new object[] { i }); } catch { break; }
+                        try { b = itemProp.GetValue(activeSlotsObj, new object[] { j }); } catch { break; }
+                        try { itemProp.SetValue(activeSlotsObj, b, new object[] { i }); } catch { break; }
+                        try { itemProp.SetValue(activeSlotsObj, a, new object[] { j }); } catch { break; }
+                        i++;
+                        j--;
+                    }
+                }
+
+                var trySetIndexMethod = FindMethodInHierarchy(cardGroup.GetType(), "TrySetLayoutGroupIndex", flags, new Type[] { typeof(int) });
+                try { if (trySetIndexMethod != null) trySetIndexMethod.Invoke(cardGroup, new object[] { -1 }); } catch { }
+            }
+            catch { }
+        }
+
+        private static bool TryGetCardViewXFromSlot(object slotObj, BindingFlags flags, out float x)
+        {
+            x = 0f;
+            if (slotObj == null) return false;
+
+            try
+            {
+                var interactable = TryGetSlottedInteractableFromSlot(slotObj, flags);
+                if (interactable == null) return false;
+
+                var view = TryGetCardViewFromInteractable(interactable, flags);
+                if (view == null) return false;
+
+                x = view.transform.position.x;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private bool TryRunNativeInteractionLayerRefresh(Nosebleed.Pancake.View.HandPileView handView)
         {
             if (handView == null) return false;
@@ -1050,15 +1164,41 @@ namespace VampireCreeperMod
                     try { cardGroup.TryRemoveCard(card); } catch { }
                 }
 
-                // AddCardToTop 需要倒序插入，最终内部顺序才与模型顺序一致
-                for (int i = modelOrderCards.Count - 1; i >= 0; i--)
+                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+                var addBottomMethod = FindSingleParameterMethodInHierarchy(cardGroup.GetType(), "AddCardToBottom", flags);
+                var addTopMethod = FindSingleParameterMethodInHierarchy(cardGroup.GetType(), "AddCardToTop", flags);
+
+                if (addBottomMethod != null)
                 {
-                    var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
-                    if (card == null) continue;
-                    try { cardGroup.AddCardToTop(card); } catch { }
+                    // Preferred: append left-to-right in model order to keep navigation direction natural.
+                    for (int i = 0; i < modelOrderCards.Count; i++)
+                    {
+                        var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
+                        if (card == null) continue;
+                        try { addBottomMethod.Invoke(cardGroup, new object[] { card }); } catch { }
+                    }
+                }
+                else if (addTopMethod != null)
+                {
+                    // Fallback when only AddCardToTop exists: insert in reverse to preserve visual order.
+                    for (int i = modelOrderCards.Count - 1; i >= 0; i--)
+                    {
+                        var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
+                        if (card == null) continue;
+                        try { addTopMethod.Invoke(cardGroup, new object[] { card }); } catch { }
+                    }
+                }
+                else
+                {
+                    // Last fallback to previous direct call path.
+                    for (int i = modelOrderCards.Count - 1; i >= 0; i--)
+                    {
+                        var card = modelOrderCards[i] as Nosebleed.Pancake.Models.CardModel;
+                        if (card == null) continue;
+                        try { cardGroup.AddCardToTop(card); } catch { }
+                    }
                 }
 
-                var flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
                 var layoutGroupField = FindFieldInHierarchy(cardGroup.GetType(), "_layoutGroup", flags);
                 var layoutGroupObj = layoutGroupField != null ? layoutGroupField.GetValue(cardGroup) : null;
                 if (layoutGroupObj != null)
