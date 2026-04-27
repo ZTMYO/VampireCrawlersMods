@@ -40,6 +40,22 @@ namespace ShowEnemyHpMod
             currentHp = 0;
             maxHp = 0;
 
+            // 优先使用当前战斗模型，避免敌人缓存列表混入非本场战斗对象导致总血量偏大
+            if (CapturedEncounter != null)
+            {
+                try
+                {
+                    currentHp = CapturedEncounter.CurrentHealth;
+                    maxHp = CapturedEncounter.MaxHealth;
+                    if (maxHp > 0)
+                    {
+                        LastKnownMaxHp = maxHp;
+                        return;
+                    }
+                }
+                catch { }
+            }
+
             // 移除已销毁的引用，但保留已死亡的敌人以维持 MaxHp 的稳定性，防止进度条跳变
             ActiveEnemies.RemoveAll(e => e == null);
 
@@ -146,6 +162,7 @@ namespace ShowEnemyHpMod
         {
             public static void Postfix(EnemyModel __instance)
             {
+                if (Instance.CachedPlayer == null || !Instance.CachedPlayer.IsInEncounter) return;
                 if (!Instance.ActiveEnemies.Contains(__instance))
                     Instance.ActiveEnemies.Add(__instance);
             }
@@ -183,6 +200,11 @@ namespace ShowEnemyHpMod
             public static void Postfix()
             {
                 Instance.CapturedEncounter = null;
+                Instance.ActiveEnemies.Clear();
+                Instance.LastKnownMaxHp = 0;
+                Instance.LastRealHp = 0;
+                Instance.DisplayedPercent = 0;
+                Instance.LastChangeTime = 0;
             }
         }
 
@@ -192,6 +214,7 @@ namespace ShowEnemyHpMod
         {
             public static void Postfix(EnemyModel __instance)
             {
+                if (Instance.CachedPlayer == null || !Instance.CachedPlayer.IsInEncounter) return;
                 if (!Instance.ActiveEnemies.Contains(__instance))
                     Instance.ActiveEnemies.Add(__instance);
             }
