@@ -375,6 +375,11 @@ namespace VampireCreeperMod
                 int direction = ascending ? 1 : -1;
                 sortedCards.Sort((a, b) =>
                 {
+                    bool isWildA = IsWildCard(a);
+                    bool isWildB = IsWildCard(b);
+                    if (isWildA && !isWildB) return -1 * direction;
+                    if (!isWildA && isWildB) return 1 * direction;
+
                     int pA = GetSortPriority(a);
                     int pB = GetSortPriority(b);
                     int cmp = pA.CompareTo(pB);
@@ -676,7 +681,26 @@ namespace VampireCreeperMod
             {
                 if (card != null && card.CardCostType != null)
                 {
-                    var typeName = card.CardCostType.GetType().Name;
+                    var costType = card.CardCostType;
+                    
+                    try
+                    {
+                        var tryCastMethod = typeof(Il2CppObjectBase).GetMethod("TryCast", BindingFlags.Public | BindingFlags.Instance);
+                        if (tryCastMethod != null)
+                        {
+                            var genericMethod = tryCastMethod.MakeGenericMethod(typeof(Nosebleed.Pancake.GameLogic.WildCostType));
+                            var casted = genericMethod.Invoke(costType, null);
+                            if (casted != null) return true;
+                        }
+                    }
+                    catch { }
+
+                    if (costType is Nosebleed.Pancake.GameLogic.WildCostType)
+                    {
+                        return true;
+                    }
+                    
+                    var typeName = costType.GetType().Name;
                     if (!string.IsNullOrEmpty(typeName) && typeName.Contains("WildCostType"))
                     {
                         return true;

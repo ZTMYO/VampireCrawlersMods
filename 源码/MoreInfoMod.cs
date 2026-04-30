@@ -2,6 +2,7 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using Il2CppInterop.Runtime.Injection;
+using Il2CppInterop.Runtime.InteropTypes;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -212,9 +213,16 @@ namespace VampireCreeperMod
                 if (!HasComboContext(player)) return;
                 if (!MoreInfoMod.EncounterHasPlayedCard) return;
 
-                if (TryGetComboTriggerPoint(player, out var comboPoint))
+                if (TryGetComboTriggerPoint(player, out var comboPoint, out var isWildCombo))
                 {
-                    _comboHudText = "可连击法力:" + comboPoint;
+                    if (isWildCombo)
+                    {
+                        _comboHudText = "可连击法力:任意";
+                    }
+                    else
+                    {
+                        _comboHudText = "可连击法力:" + comboPoint;
+                    }
                     _showComboHud = true;
                 }
             }
@@ -254,10 +262,26 @@ namespace VampireCreeperMod
             return false;
         }
 
-        private static bool TryGetComboTriggerPoint(Nosebleed.Pancake.Models.PlayerModel player, out int comboPoints)
+        private static bool TryGetComboTriggerPoint(Nosebleed.Pancake.Models.PlayerModel player, out int comboPoints, out bool isWildCombo)
         {
             comboPoints = 0;
+            isWildCombo = false;
             if (player == null) return false;
+
+            try
+            {
+                if (TryGetMemberValue(player, "PreviousCard", out var previousCardObj) &&
+                    previousCardObj is Nosebleed.Pancake.Models.CardModel previousCard &&
+                    previousCard != null)
+                {
+                    if (IsWildCard(previousCard))
+                    {
+                        isWildCombo = true;
+                        return true;
+                    }
+                }
+            }
+            catch { }
 
             try
             {
@@ -325,6 +349,43 @@ namespace VampireCreeperMod
                     if (ret is int i)
                     {
                         comboCost = i;
+                        return true;
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static bool IsWildCard(Nosebleed.Pancake.Models.CardModel card)
+        {
+            try
+            {
+                if (card != null && card.CardCostType != null)
+                {
+                    var costType = card.CardCostType;
+                    
+                    try
+                    {
+                        var tryCastMethod = typeof(Il2CppObjectBase).GetMethod("TryCast", BindingFlags.Public | BindingFlags.Instance);
+                        if (tryCastMethod != null)
+                        {
+                            var genericMethod = tryCastMethod.MakeGenericMethod(typeof(Nosebleed.Pancake.GameLogic.WildCostType));
+                            var casted = genericMethod.Invoke(costType, null);
+                            if (casted != null) return true;
+                        }
+                    }
+                    catch { }
+
+                    if (costType is Nosebleed.Pancake.GameLogic.WildCostType)
+                    {
+                        return true;
+                    }
+                    
+                    var typeName = costType.GetType().Name;
+                    if (!string.IsNullOrEmpty(typeName) && typeName.Contains("WildCostType"))
+                    {
                         return true;
                     }
                 }
